@@ -1,0 +1,475 @@
+# Manage a license secret
+create_license_secret: true
+ 
+# Disable Gloo Federation (Gloo Admin UI will be installed regardless)
+gloo-fed:
+  enabled: false
+ 
+# Global values
+global:
+  ## Override `settings.spec.extauth` with `global.extensions.extAuth`
+  extauthCustomYaml: false
+ 
+  ## Extensions
+  extensions:
+    ## Caching
+    caching:
+      enabled: true
+      name: caching-service
+      deployment:
+        name: caching-service
+        floatingUserId: false
+        glooAddress: gloo
+        image:
+          pullPolicy: IfNotPresent
+          repository: caching-ee
+        runAsUser: 10101
+        stats: null
+      service:
+        httpPort: 8085
+ 
+    ## Ext-auth
+    extAuth:
+      enabled: false
+      deployment:
+        name: extauth
+        floatingUserId: false
+        fsGroup: 10101
+        glooPort: 9977
+        image:
+          pullPolicy: IfNotPresent
+          repository: extauth-ee
+        port: 8083
+        runAsUser: 10101
+        stats: null
+        customEnv:
+          - name: LOG_LEVEL
+            value: debug
+      service:
+        name: extauth
+        port: 8083
+      serviceName: ext-auth
+      signingKey:
+        name: extauth-signing-key
+        signing-key: ""
+      standaloneDeployment: false
+      envoySidecar: false
+      tlsEnabled: false
+      secretName: extauth-tls
+      transportApiVersion: V3
+      userIdHeader: x-user-id
+      ## Deal with timeouts in the OIDC flow (Default: 200ms)
+      requestTimeout: 1s
+  
+    ## Redis cache
+    glooRedis:
+      enableAcl: true
+ 
+    ## Rate limit
+    rateLimit:
+      enabled: true
+      deployment:
+        name: rate-limit
+        floatingUserId: false
+        dynamodb:
+          secretName: null
+        glooAddress: gloo
+        glooPort: 9977
+        image:
+          pullPolicy: IfNotPresent
+          repository: rate-limit-ee
+        runAsUser: 10101
+        stats: null
+      service:
+        name: rate-limit
+        port: 18081
+  glooMtls:
+    enabled: false
+  glooRbac:
+    create: true
+  glooStats:
+    enabled: true
+    routePrefixRewrite: /stats/prometheus
+  graphql:
+    changeValidation:
+      rejectBreaking: false
+      rules:
+        dangerousToBreaking: false
+        deprecatedFieldRemovalDangerous: false
+        ignoreDescriptionChanges: false
+        ignoreUnreachable: false
+  image:
+    pullPolicy: IfNotPresent
+    registry: quay.io/solo-io
+  extraSpecs: true
+ 
+# Control Plane values
+gloo:
+  ## Default license secret name
+  license_secret_name: license
+  
+  ## Global bootstrap settings
+  settings:
+    create: true
+  
+    ## For using both watch and write namespaces as the same. (Disabled as we customize these below)
+    singleNamespace: false
+  
+    ## Only watch for services and CRDS in following namespaces
+    watchNamespaces:
+      - petclinic
+      - petstore
+      - apps
+      - apps-configuration
+      - gloo-system
+      - gloo-portal
+  
+    ## Namespace for Gloo resources
+    writeNamespace: gloo-system
+  
+    ## Disabled as we do not want to map K8 Services -> Upstreams in memory
+    ## Causes performance issues
+    disableKubernetesDestinations: true
+ 
+  ## Discovery
+  discovery:
+    enabled: true
+    ## Whitelist mode for FDS polling
+    fdsMode: WHITELIST
+    ## Disabled due to performance issues
+    udsOptions:
+      enabled: false
+    deployment:
+      image:
+        pullPolicy: IfNotPresent
+        repository: discovery-ee
+      replicas: 1
+      runAsUser: 10101
+      enablePodSecurityContext: true
+      fsGroup: 10101
+
+    serviceAccount: {}
+ 
+  ## Gateway
+  gateway:
+    enabled: true
+    readGatewaysFromAllNamespaces: false
+    ## This overrides the default behavior of in-memory Proxy CR (True will store it in etcd)
+    persistProxySpec: false
+    validation:
+      enabled: true
+      failurePolicy: "Fail"
+      secretName: gateway-validation-certs
+      alwaysAcceptResources: false
+      allowWarnings: true
+      disableTransformationValidation: false
+      warnRouteShortCircuiting: false
+      validationServerGrpcMaxSizeBytes: 104857600
+      webhook:
+        enabled: true
+        disableHelmHook: false
+        extraAnnotations: {}
+    certGenJob:
+      enabled: true
+      image:
+        pullPolicy: IfNotPresent
+      restartPolicy: OnFailure
+      setTtlAfterFinished: true
+      ttlSecondsAfterFinished: 60
+      runAsUser: 10101
+      cron:
+        enabled: false
+        schedule: "* * * * *"
+      runOnUpdate: false
+    rolloutJob:
+      enabled: true
+      image:
+        pullPolicy: IfNotPresent
+      restartPolicy: OnFailure
+      runAsUser: 10101
+      ttlSecondsAfterFinished: 60
+    cleanupJob:
+      enabled: true
+      image:
+        pullPolicy: IfNotPresent
+      restartPolicy: OnFailure
+      runAsUser: 10101
+      ttlSecondsAfterFinished: 60
+    proxyServiceAccount: {}
+  
+  ## Gateway Proxies
+  gatewayProxies:
+    gatewayProxy:
+      ## Optional this can be disabled to generate Gateways via GitOps
+      disableGeneratedGateways: false
+  
+      ## Typical custom gateway settings
+      gatewaySettings:
+        enabled: true
+  
+        ## IPv4 only (Set to false for IPv6 binding as well)
+        ipv4Only: true
+  
+        ## Custom access logging config
+        accessLoggingService:
+          accessLog:
+            - fileSink:
+                path: /dev/stdout
+                stringFormat: >
+                  [%START_TIME%] "%REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% %PROTOCOL%"
+                  %RESPONSE_CODE% %RESPONSE_FLAGS% %BYTES_RECEIVED% %BYTES_SENT% %DURATION%
+                  %RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)% "%REQ(X-FORWARDED-FOR)%" "%REQ(USER-AGENT)%"
+                  "%REQ(X-REQUEST-ID)%" "%REQ(:AUTHORITY)%" "%UPSTREAM_HOST%"
+            - grpcService:
+                logName: "monetization-log"
+                staticClusterName: "extauth"
+  
+        ## Custom http gateway
+        # customHttpGateway:
+        #   options:
+        #     ## Custom healthcheck endpoint used by LB and readiness probe
+        #     healthCheck:
+        #       path: /health/ready
+        #     httpConnectionManagerSettings:
+        #       ## Use the real remote address of the client connection instead of using x-forwarded-for HTTP header
+        #       useRemoteAddress: true
+      
+      ## Lets default this to Envoy API V3
+      envoyApiVersion: V3
+      ## Default bind address (Alternatively to allow all IPv4: 0.0.0.0)
+      loopBackAddress: 0.0.0.0
+      ## For failover scenarios (Useful federation is required)
+      ## Ref to https://docs.solo.io/gloo-edge/latest/guides/gloo_federation/service_failover/
+      failover:
+        enabled: false
+        port: 15443
+        secretName: failover-downstream
+      kind:
+        deployment:
+          ## Scaling
+          replicas: 1
+      ## Default log level
+      logLevel: info
+      ## Preferably not co-located
+      antiAffinity: true
+      ## Enable preStop hook. Only effective if health probes are enabled above
+      ## This is useful for draining any connections prior to terminating
+      gracefulShutdown:
+        enabled: true
+        ## Time for preStop hook to wait before allowing Envoy to terminate
+        sleepTimeSeconds: 25
+      ## Grace period before terminating the pod (This should be > `sleepTimeSeconds`)
+      terminationGracePeriodSeconds: 30
+      ## Prevent cascading failure when upstream hosts start failing health checks in large numbers
+      ## Ref to https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/panic_threshold
+      healthyPanicThreshold: 50
+      ## The number of concurrent connections
+      globalDownstreamMaxConnections: 250000
+      ## Horizontal pod autoscaler
+      horizontalPodAutoscaler:
+      ## Pod disruption budget
+      podDisruptionBudget:
+        ## Well this should ideally be < replicas
+        minAvailable: 2
+      podTemplate:
+        image:
+          pullPolicy: IfNotPresent
+          repository: gloo-ee-envoy-wrapper
+        ## Enable readiness probe
+        probes: true
+        ## Also enable liveness probe
+        livenessProbeEnabled: true
+        ## Custom readiness probe using health check endpoint set in `customHttpGateway`
+        # customReadinessProbe:
+        #   httpGet:
+        #     scheme: HTTP
+        #     port: 8080
+        #     path: /health/ready
+        #   failureThreshold: 2
+        #   initialDelaySeconds: 5
+        #   periodSeconds: 5
+        customLivenessProbe: {}
+        httpPort: 8080
+        httpsPort: 8443
+        runAsUser: 10101
+        enablePodSecurityContext: true
+        fsGroup: 10101
+        runUnprivileged: true
+        disableNetBind: true
+        resources:
+          requests:
+            cpu: "1"
+            memory: "1Gi"
+          limits:
+            cpu: "2"
+            memory: "2Gi"
+      service:
+        type: LoadBalancer
+        ## clusterIP: None
+        httpPort: 80
+        httpsPort: 443
+        customPorts: []
+        extraAnnotations:
+          prometheus.io/path: /metrics
+          prometheus.io/port: "8081"
+          prometheus.io/scrape: "true"
+          ## Annotation example: setup ssl with aws cert when service.type is LoadBalancer
+          ## extraAnnotations:
+          ##   service.beta.kubernetes.io/aws-load-balancer-ssl-cert: arn:aws:acm:us-east-1:EXAMPLE_CERT
+      tracing:
+      configMap:
+        data:
+      envoyOverloadManager:
+        enabled: false
+        actions: []
+        bufferFactoryConfig:
+        refreshInterval: 1s
+        resourceMonitors: []
+      ## Useful when xds server is enabled - Not recommended for Production use
+      ## Intentionally unset, so we default to the gloo service address. if set, this overrides the derived gloo service address
+      ## xdsServiceAddress: xds-relay.default.svc.cluster.local
+      ## Intentionally unset, so we default to the gloo service port. if set, this overrides .Values.gloo.deployment.xdsPort
+      ## xdsServicePort: 9991
+  
+  ## Access Logger
+  accessLogger:
+    enabled: false
+    port: 8083
+    serviceName: AccessLog
+    image:
+      pullPolicy: IfNotPresent
+      repository: access-logger
+    runAsUser: 10101
+    replicas: 1
+    stats:
+      enabled: true
+  
+  ## Core control plan service
+  gloo:
+    ## Default log level
+    logLevel: info
+    deployment:
+      image:
+        pullPolicy: IfNotPresent
+        repository: gloo-ee
+      xdsPort: 9977
+      restXdsPort: 9976
+      validationPort: 9988
+      proxyDebugPort: 9966
+      replicas: 1
+      runAsUser: 10101
+      serviceAccount: {}
+  
+  # Disable as an ingress controller
+  ingress:
+    enabled: false
+ 
+# Grafana
+grafana:
+  adminPassword: admin
+  adminUser: admin
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+      - disableDeletion: false
+        editable: true
+        folder: gloo
+        name: gloo
+        options:
+          path: /var/lib/grafana/dashboards/gloo
+        orgId: 1
+        type: file
+  dashboardsConfigMaps:
+    gloo: glooe-grafana-custom-dashboards
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+      - access: proxy
+        isDefault: true
+        name: gloo
+        type: prometheus
+        url: http://glooe-prometheus-server:80
+  defaultInstallationEnabled: true
+  fullnameOverride: glooe-grafana
+  initChownData:
+    enabled: false
+  nameOverride: glooe-grafana
+  persistence:
+    enabled: true
+    size: 100Mi
+  rbac:
+    create: false
+    pspEnabled: false
+  securityContext:
+    fsGroup: 472
+    runAsGroup: 472
+    runAsUser: 472
+  testFramework:
+    enabled: false
+ 
+# Observability values
+observability:
+  customGrafana: {}
+  deployment:
+    floatingUserId: false
+    image:
+      pullPolicy: IfNotPresent
+      repository: observability-ee
+    runAsUser: 10101
+    stats: null
+  enabled: true
+  upstreamDashboardTemplate: ""
+ 
+# Prometheus values
+prometheus:
+  alertmanager:
+    enabled: false
+  enabled: true
+  kube-state-metrics:
+    fullnameOverride: glooe-prometheus-kube-state-metrics
+  nameOverride: glooe-prometheus
+  nodeExporter:
+    enabled: false
+  pushgateway:
+    enabled: false
+  server:
+    fullnameOverride: glooe-prometheus-server
+    global:
+      evaluation_interval: 10s
+      scrape_interval: 10s
+    persistentVolume:
+      size: 16Gi
+ 
+# Redis specific values
+redis:
+  disabled: false
+  aclPrefix: user default +@all allkeys on >
+  clientSideShardingEnabled: false
+  deployment:
+    name: redis
+    enablePodSecurityContext: true
+    floatingUserId: false
+    image:
+      pullPolicy: IfNotPresent
+      registry: docker.io
+      repository: redis
+      tag: 6.2.4
+    initContainer:
+      image:
+        registry: docker.io
+        repository: busybox
+        tag: "1.28"
+    fsGroup: 999
+    runAsGroup: 999
+    runAsUser: 999
+    staticPort: 6379
+  service:
+    name: redis
+    port: 6379
+  cert:
+    cacrt: ""
+    crt: ""
+    enabled: false
+    key: ""

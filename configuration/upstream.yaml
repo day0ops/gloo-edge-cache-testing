@@ -1,0 +1,10 @@
+apiVersion: gloo.solo.io/v1
+kind: Upstream
+metadata:
+  name: test-service-us
+  namespace: apps-configuration
+spec:
+    kube:
+      serviceName: test-service
+      serviceNamespace: apps
+      servicePort: 8000
