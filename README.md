@@ -1,4 +1,4 @@
-# JSON Transformation on Gloo Edge
+# Cache testing on Gloo Edge
 
 ## Prerequisites
 
